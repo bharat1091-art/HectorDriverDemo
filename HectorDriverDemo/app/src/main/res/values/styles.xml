@@ -2,11 +2,11 @@
 
     <!-- App theme referenced by AndroidManifest.xml -->
     <style name="Theme.HectorDriverDemo" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Optional: tweak system bar colors; tools:targetApi avoids older API warnings -->
+        <!-- Optional: system bar colors using Material attributes -->
         <item name="android:statusBarColor" tools:targetApi="l">?attr/colorSurface</item>
         <item name="android:navigationBarColor" tools:targetApi="l">?attr/colorSurface</item>
     </style>
 
-    <!-- (Optional) Temporary alias so both names resolve while you transition -->
+    <!-- Optional alias if some layouts/code still use the old name -->
     <style name="Theme.HectorDriver" parent="@style/Theme.HectorDriverDemo" />
 </resources>
