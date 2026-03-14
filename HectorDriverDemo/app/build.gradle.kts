@@ -1,4 +1,3 @@
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -31,13 +30,26 @@ android {
         }
     }
 
+    // Use Java 17 with AGP 8.x / Gradle 8.x
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
     buildFeatures {
         compose = true
     }
+
+    // Compose compiler that matches Compose 1.6.8 (via BOM 2024.04.01)
     composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.8"
+        kotlinCompilerExtensionVersion = "1.5.11"
     }
-    packagingOptions {
+
+    // AGP 8.x syntax for packaging
+    packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
@@ -45,6 +57,7 @@ android {
 }
 
 dependencies {
+    // Compose BOM (aligns all androidx.compose artifacts to 1.6.8)
     val composeBom = platform("androidx.compose:compose-bom:2024.04.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)
