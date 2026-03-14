@@ -9,8 +9,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
+      # Opt into Node.js 24 for JS-based actions (removes Node 20 deprecation warnings)
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
+    # All run steps happen inside the Android project directory
     defaults:
       run:
         working-directory: HectorDriverDemo
@@ -42,34 +44,51 @@ jobs:
         run: |
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      # 🔧 Bootstrap: regenerate wrapper JAR exactly for the version in gradle-wrapper.properties (Gradle 8.2 here)
-      - name: Bootstrap Gradle wrapper if broken/missing
+      # 🔧 VERBOSE bootstrap: regenerate wrapper JAR exactly for the Gradle version
+      # pinned in gradle/wrapper/gradle-wrapper.properties (Gradle 8.2 in your case)
+      - name: Bootstrap Gradle wrapper if broken/missing (verbose)
         run: |
-          set -e
-          if [ ! -f gradle/wrapper/gradle-wrapper.properties ]; then
-            echo "Missing gradle/wrapper/gradle-wrapper.properties"; exit 1
-          fi
-          dist_url=$(grep distributionUrl gradle/wrapper/gradle-wrapper.properties | cut -d'=' -f2-)
+          set -euxo pipefail
+          echo "Project dir: $GITHUB_WORKSPACE/HectorDriverDemo"
+          test -f gradle/wrapper/gradle-wrapper.properties
+
+          dist_url=$(grep '^distributionUrl=' gradle/wrapper/gradle-wrapper.properties | cut -d'=' -f2-)
           echo "Using distribution: $dist_url"
-          # If jar missing or incompatible, regenerate it
+
           regen=0
           if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            echo "gradle-wrapper.jar missing → will regenerate"
             regen=1
           else
+            echo "Testing existing wrapper jar..."
             if ! java -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain -v >/dev/null 2>&1; then
+              echo "existing wrapper jar seems incompatible → will regenerate"
               regen=1
             fi
           fi
+
           if [ "$regen" = "1" ]; then
             mkdir -p /tmp/gradle && cd /tmp/gradle
-            curl -sL "$dist_url" -o gradle.zip
+            echo "Downloading Gradle distribution..."
+            curl -fLsS "$dist_url" -o gradle.zip
+            echo "Unzipping..."
             unzip -q gradle.zip
             GDIR=$(find . -maxdepth 1 -type d -name "gradle-*")
-            "$GDIR/bin/gradle" -p "$GITHUB_WORKSPACE/HectorDriverDemo" wrapper
-            echo "Wrapper regenerated for $dist_url"
+            echo "Extracted to: $GDIR"
+
+            # Ensure gradle launcher is executable
+            chmod +x "$GDIR/bin/gradle"
+
+            echo "Running Gradle 'wrapper' task with diagnostics…"
+            "$GDIR/bin/gradle" -v
+            "$GDIR/bin/gradle" -p "$GITHUB_WORKSPACE/HectorDriverDemo" wrapper --stacktrace --info
+            echo "Wrapper regenerated"
           else
-            echo "gradle-wrapper.jar looks OK."
+            echo "gradle-wrapper.jar is OK"
           fi
+
+          echo "After bootstrap, wrapper directory contains:"
+          ls -la gradle/wrapper || true
 
       - name: Ensure Gradle wrapper is executable
         run: chmod +x ./gradlew
