@@ -9,7 +9,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # Silence Node 20 deprecation by opting into Node 24 for JavaScript actions.
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
     defaults:
@@ -39,10 +38,42 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses
 
-      # Install modern platform/build-tools (adjust if your project uses others)
       - name: Install SDK platforms and build-tools
         run: |
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      # 🔧 NEW: Recreate the wrapper JAR exactly for the version in gradle-wrapper.properties
+      - name: Bootstrap Gradle wrapper if broken/missing
+        run: |
+          set -e
+          if [ ! -f gradle/wrapper/gradle-wrapper.properties ]; then
+            echo "Missing gradle/wrapper/gradle-wrapper.properties"; exit 1
+          fi
+          dist_url=$(grep distributionUrl gradle/wrapper/gradle-wrapper.properties | cut -d'=' -f2-)
+          echo "Using distribution: $dist_url"
+          # If JAR missing or corrupted, (re)generate it
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            echo "gradle-wrapper.jar missing; generating…"
+            need_wrapper=1
+          else
+            # quick sanity: try to run wrapper with current JAR; if fails, regenerate
+            if ! java -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain -v >/dev/null 2>&1; then
+              echo "gradle-wrapper.jar seems incompatible; regenerating…"
+              need_wrapper=1
+            fi
+          fi
+          if [ "${need_wrapper:-0}" = "1" ]; then
+            mkdir -p /tmp/gradle && cd /tmp/gradle
+            curl -sL "$dist_url" -o gradle.zip
+            unzip -q gradle.zip
+            GDIR=$(find . -maxdepth 1 -type d -name "gradle-*")
+            echo "Extracted to: $GDIR"
+            # Run Gradle to generate wrapper files into the project dir (not the extracted dir)
+            "$GDIR/bin/gradle" -p "$GITHUB_WORKSPACE/HectorDriverDemo" wrapper
+            echo "Wrapper regenerated."
+          else
+            echo "gradle-wrapper.jar looks fine."
+          fi
 
       - name: Ensure Gradle wrapper is executable
         run: chmod +x ./gradlew
@@ -59,5 +90,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: hector-driver-demo-apk
-          # 'path' is relative to the repo root. Keep the HectorDriverDemo/ prefix.
           path: HectorDriverDemo/app/build/outputs/apk/debug/*.apk
