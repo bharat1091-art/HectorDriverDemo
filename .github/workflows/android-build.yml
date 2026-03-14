@@ -9,10 +9,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # Opt into Node.js 24 for JS-based actions (removes Node 20 deprecation warnings)
+      # Opt into Node.js 24 for JS-based actions (removes Node 20 deprecation warning)
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
-    # All run steps happen inside the Android project directory
+    # Run all commands inside the Android project directory
     defaults:
       run:
         working-directory: HectorDriverDemo
@@ -23,7 +23,8 @@ jobs:
 
       - name: Print working directory and tree
         run: |
-          pwd
+          echo "PWD = $PWD"
+          echo "GITHUB_WORKSPACE = $GITHUB_WORKSPACE"
           ls -la
           ls -la gradle/wrapper || true
 
@@ -44,16 +45,21 @@ jobs:
         run: |
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      # 🔧 VERBOSE bootstrap: regenerate wrapper JAR exactly for the Gradle version
-      # pinned in gradle/wrapper/gradle-wrapper.properties (Gradle 8.2 in your case)
+      # 🔧 VERBOSE bootstrap: regenerate wrapper JAR for the Gradle version
+      # defined in gradle/wrapper/gradle-wrapper.properties.
+      # It also UNESCAPES 'https\://' → 'https://' before calling curl.
       - name: Bootstrap Gradle wrapper if broken/missing (verbose)
         run: |
           set -euxo pipefail
-          echo "Project dir: $GITHUB_WORKSPACE/HectorDriverDemo"
+
           test -f gradle/wrapper/gradle-wrapper.properties
 
-          dist_url=$(grep '^distributionUrl=' gradle/wrapper/gradle-wrapper.properties | cut -d'=' -f2-)
-          echo "Using distribution: $dist_url"
+          raw_url=$(grep '^distributionUrl=' gradle/wrapper/gradle-wrapper.properties | cut -d'=' -f2- | tr -d '\r')
+          # Unescape the '\:' used in .properties so curl gets a valid URL
+          dist_url=${raw_url//\\:/:}
+
+          echo "distributionUrl (raw)    : $raw_url"
+          echo "distributionUrl (usable) : $dist_url"
 
           regen=0
           if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
@@ -62,7 +68,7 @@ jobs:
           else
             echo "Testing existing wrapper jar..."
             if ! java -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain -v >/dev/null 2>&1; then
-              echo "existing wrapper jar seems incompatible → will regenerate"
+              echo "Existing wrapper jar seems incompatible → will regenerate"
               regen=1
             fi
           fi
@@ -70,18 +76,18 @@ jobs:
           if [ "$regen" = "1" ]; then
             mkdir -p /tmp/gradle && cd /tmp/gradle
             echo "Downloading Gradle distribution..."
-            curl -fLsS "$dist_url" -o gradle.zip
+            curl -fL --retry 3 --retry-connrefused "$dist_url" -o gradle.zip
             echo "Unzipping..."
             unzip -q gradle.zip
             GDIR=$(find . -maxdepth 1 -type d -name "gradle-*")
             echo "Extracted to: $GDIR"
 
-            # Ensure gradle launcher is executable
             chmod +x "$GDIR/bin/gradle"
 
             echo "Running Gradle 'wrapper' task with diagnostics…"
             "$GDIR/bin/gradle" -v
-            "$GDIR/bin/gradle" -p "$GITHUB_WORKSPACE/HectorDriverDemo" wrapper --stacktrace --info
+            # Use the current working directory (already the project) to avoid path confusion
+            "$GDIR/bin/gradle" -p "$PWD" wrapper --stacktrace --info
             echo "Wrapper regenerated"
           else
             echo "gradle-wrapper.jar is OK"
