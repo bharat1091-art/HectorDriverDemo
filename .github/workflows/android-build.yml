@@ -9,10 +9,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # Opt into Node.js 24 for JS-based actions (removes Node 20 deprecation warnings)
+      # Silence Node20 deprecation by opting JS actions into Node24
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
-    # All steps run inside the Android project directory by default
+    # Run steps inside the Android project directory by default
     defaults:
       run:
         working-directory: HectorDriverDemo
@@ -45,27 +45,20 @@ jobs:
         run: |
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      # 🔧 VERBOSE bootstrap:
-      # - Reads distributionUrl from gradle-wrapper.properties
-      # - Unescapes https\:// → https:// for curl
-      # - Downloads Gradle and runs the 'wrapper' task
-      # - IMPORTANT: Runs Gradle with -p <PROJECT_DIR> (your real project), not /tmp/gradle
+      # 🔧 Bootstrap wrapper jar to match gradle-wrapper.properties
       - name: Bootstrap Gradle wrapper if broken/missing (verbose)
         run: |
           set -euxo pipefail
 
-          # Save the REAL project directory before we 'cd' anywhere.
           PROJECT_DIR="$PWD"
           echo "Project dir = $PROJECT_DIR"
           test -f "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.properties"
 
-          # Read and unescape distributionUrl
           raw_url=$(grep '^distributionUrl=' "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.properties" | cut -d'=' -f2- | tr -d '\r')
           dist_url=${raw_url//\\:/:}
           echo "distributionUrl (raw)    : $raw_url"
           echo "distributionUrl (usable) : $dist_url"
 
-          # Decide whether to regenerate the wrapper JAR
           regen=0
           if [ ! -f "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.jar" ]; then
             echo "gradle-wrapper.jar missing → will regenerate"
@@ -79,7 +72,6 @@ jobs:
           fi
 
           if [ "$regen" = "1" ]; then
-            # Work in a temp dir to download Gradle
             mkdir -p /tmp/gradle && cd /tmp/gradle
             echo "Downloading Gradle distribution..."
             curl -fL --retry 3 --retry-connrefused "$dist_url" -o gradle.zip
@@ -87,13 +79,10 @@ jobs:
             unzip -q gradle.zip
             GDIR=$(find . -maxdepth 1 -type d -name "gradle-*")
             echo "Extracted to: $GDIR"
-
-            # Ensure gradle launcher is executable
             chmod +x "$GDIR/bin/gradle"
 
             echo "Running Gradle 'wrapper' task with diagnostics…"
             "$GDIR/bin/gradle" -v
-            # 👇 Run the wrapper task against YOUR project (not /tmp/gradle)
             "$GDIR/bin/gradle" -p "$PROJECT_DIR" wrapper --stacktrace --info
             echo "Wrapper regenerated"
           else
@@ -114,15 +103,48 @@ jobs:
       - name: Ensure Gradle wrapper is executable
         run: chmod +x ./gradlew
 
+      # 👇 This prints plugin versions and repositories so we can spot mismatches quickly
+      - name: Show AGP/Kotlin versions & repositories
+        run: |
+          echo "==== Project build.gradle.kts (top) ===="
+          sed -n '1,120p' build.gradle.kts || true
+          echo "==== settings.gradle.kts ===="
+          sed -n '1,200p' settings.gradle.kts || true
+          echo "==== app/build.gradle.kts (top) ===="
+          sed -n '1,200p' app/build.gradle.kts || true
+
       - name: Show Java/Gradle versions
         run: |
           java -version
           ./gradlew -v
 
+      # 👇 Capture FULL build log to a file, so we don't have to scroll 700+ lines in the UI
       - name: Build Debug APK (verbose)
-        run: ./gradlew assembleDebug --stacktrace --info --no-daemon
+        run: |
+          set -o pipefail
+          ./gradlew assembleDebug --stacktrace --info --no-daemon --console=plain 2>&1 | tee build-logs.txt
+
+      # 👇 On failure, print the key parts so you can paste them here easily
+      - name: Summarize failure (What went wrong / Caused by)
+        if: failure()
+        run: |
+          echo "================ What went wrong (context) ================"
+          grep -n -A6 -B6 "What went wrong" build-logs.txt || true
+          echo "================ Caused by (context) ======================"
+          grep -n -A6 -B6 "Caused by:" build-logs.txt || true
+          echo "================ LAST 200 LINES ==========================="
+          tail -n 200 build-logs.txt || true
+
+      # 👇 Upload the full build log regardless of success/failure
+      - name: Upload full Gradle build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-logs
+          path: HectorDriverDemo/build-logs.txt
 
       - name: Upload APK artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: hector-driver-demo-apk
