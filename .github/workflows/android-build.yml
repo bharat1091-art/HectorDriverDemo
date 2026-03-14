@@ -9,10 +9,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # Opt into Node.js 24 for JS-based actions (removes Node 20 deprecation warning)
+      # Opt into Node.js 24 for JS-based actions (removes Node 20 deprecation warnings)
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
-    # Run all commands inside the Android project directory
+    # All steps run inside the Android project directory by default
     defaults:
       run:
         working-directory: HectorDriverDemo
@@ -45,35 +45,41 @@ jobs:
         run: |
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      # 🔧 VERBOSE bootstrap: regenerate wrapper JAR for the Gradle version
-      # defined in gradle/wrapper/gradle-wrapper.properties.
-      # It also UNESCAPES 'https\://' → 'https://' before calling curl.
+      # 🔧 VERBOSE bootstrap:
+      # - Reads distributionUrl from gradle-wrapper.properties
+      # - Unescapes https\:// → https:// for curl
+      # - Downloads Gradle and runs the 'wrapper' task
+      # - IMPORTANT: Runs Gradle with -p <PROJECT_DIR> (your real project), not /tmp/gradle
       - name: Bootstrap Gradle wrapper if broken/missing (verbose)
         run: |
           set -euxo pipefail
 
-          test -f gradle/wrapper/gradle-wrapper.properties
+          # Save the REAL project directory before we 'cd' anywhere.
+          PROJECT_DIR="$PWD"
+          echo "Project dir = $PROJECT_DIR"
+          test -f "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.properties"
 
-          raw_url=$(grep '^distributionUrl=' gradle/wrapper/gradle-wrapper.properties | cut -d'=' -f2- | tr -d '\r')
-          # Unescape the '\:' used in .properties so curl gets a valid URL
+          # Read and unescape distributionUrl
+          raw_url=$(grep '^distributionUrl=' "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.properties" | cut -d'=' -f2- | tr -d '\r')
           dist_url=${raw_url//\\:/:}
-
           echo "distributionUrl (raw)    : $raw_url"
           echo "distributionUrl (usable) : $dist_url"
 
+          # Decide whether to regenerate the wrapper JAR
           regen=0
-          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+          if [ ! -f "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.jar" ]; then
             echo "gradle-wrapper.jar missing → will regenerate"
             regen=1
           else
             echo "Testing existing wrapper jar..."
-            if ! java -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain -v >/dev/null 2>&1; then
+            if ! java -classpath "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain -v >/dev/null 2>&1; then
               echo "Existing wrapper jar seems incompatible → will regenerate"
               regen=1
             fi
           fi
 
           if [ "$regen" = "1" ]; then
+            # Work in a temp dir to download Gradle
             mkdir -p /tmp/gradle && cd /tmp/gradle
             echo "Downloading Gradle distribution..."
             curl -fL --retry 3 --retry-connrefused "$dist_url" -o gradle.zip
@@ -82,19 +88,28 @@ jobs:
             GDIR=$(find . -maxdepth 1 -type d -name "gradle-*")
             echo "Extracted to: $GDIR"
 
+            # Ensure gradle launcher is executable
             chmod +x "$GDIR/bin/gradle"
 
             echo "Running Gradle 'wrapper' task with diagnostics…"
             "$GDIR/bin/gradle" -v
-            # Use the current working directory (already the project) to avoid path confusion
-            "$GDIR/bin/gradle" -p "$PWD" wrapper --stacktrace --info
+            # 👇 Run the wrapper task against YOUR project (not /tmp/gradle)
+            "$GDIR/bin/gradle" -p "$PROJECT_DIR" wrapper --stacktrace --info
             echo "Wrapper regenerated"
           else
             echo "gradle-wrapper.jar is OK"
           fi
 
-          echo "After bootstrap, wrapper directory contains:"
-          ls -la gradle/wrapper || true
+          echo "After bootstrap, wrapper directory:"
+          ls -l "$PROJECT_DIR/gradle/wrapper" || true
+
+      - name: Verify Gradle wrapper JAR
+        run: |
+          set -euxo pipefail
+          file gradle/wrapper/gradle-wrapper.jar || true
+          ls -l gradle/wrapper/gradle-wrapper.jar || true
+          echo "Trying to execute GradleWrapperMain -v…"
+          java -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain -v || (echo "Wrapper JAR still invalid"; exit 2)
 
       - name: Ensure Gradle wrapper is executable
         run: chmod +x ./gradlew
