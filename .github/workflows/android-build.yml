@@ -8,6 +8,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # Silence Node 20 deprecation by opting into Node 24 for JavaScript actions.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
     defaults:
       run:
@@ -16,6 +19,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Print working directory and tree
+        run: |
+          pwd
+          ls -la
+          ls -la gradle/wrapper || true
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -27,17 +36,28 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Accept Android licenses
+      - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses
 
-      - name: Make gradlew executable
+      # Install modern platform/build-tools (adjust if your project uses others)
+      - name: Install SDK platforms and build-tools
+        run: |
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Ensure Gradle wrapper is executable
         run: chmod +x ./gradlew
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace --no-daemon
+      - name: Show Java/Gradle versions
+        run: |
+          java -version
+          ./gradlew -v
+
+      - name: Build Debug APK (verbose)
+        run: ./gradlew assembleDebug --stacktrace --info --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: hector-driver-demo-apk
+          # 'path' is relative to the repo root. Keep the HectorDriverDemo/ prefix.
           path: HectorDriverDemo/app/build/outputs/apk/debug/*.apk
