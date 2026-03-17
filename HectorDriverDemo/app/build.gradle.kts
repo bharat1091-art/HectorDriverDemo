@@ -45,7 +45,7 @@ android {
 
     // Compose compiler that matches Compose 1.6.8 (via BOM 2024.04.01)
     composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.11"
+        kotlinCompilerExtensionVersion = "1.5.10"
     }
 
     // AGP 8.x syntax for packaging
