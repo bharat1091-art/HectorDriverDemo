@@ -57,7 +57,7 @@ android {
 }
 
 dependencies {
-    // Compose BOM (aligns all androidx.compose artifacts to 1.6.8)
+    // Compose BOM (keeps all compose libs aligned)
     val composeBom = platform("androidx.compose:compose-bom:2024.04.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)
@@ -66,10 +66,18 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.0")
 
+    // Compose UI
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-extended:1.6.8")
+
+    // ✅ Add this (covers animateIntAsState, rememberInfiniteTransition, etc.)
+    implementation("androidx.compose.animation:animation")
+
+    // Icons (let BOM choose the right version)
+    implementation("androidx.compose.material:material-icons-extended")
+
+    // (Optional) Material Components for Views – harmless to keep
     implementation("com.google.android.material:material:1.12.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
