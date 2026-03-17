@@ -5,17 +5,20 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+defaults:
+  run:
+    working-directory: HectorDriverDemo
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      # Silence Node20 deprecation by opting JS actions into Node24
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-
-    # Run steps inside the Android project directory by default
-    defaults:
-      run:
-        working-directory: HectorDriverDemo
 
     steps:
       - name: Checkout code
@@ -31,9 +34,9 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
-          cache: 'gradle'
+          cache: gradle
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -45,51 +48,25 @@ jobs:
         run: |
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      # 🔧 Bootstrap wrapper jar to match gradle-wrapper.properties
       - name: Bootstrap Gradle wrapper if broken/missing (verbose)
         run: |
           set -euxo pipefail
-
           PROJECT_DIR="$PWD"
-          echo "Project dir = $PROJECT_DIR"
           test -f "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.properties"
-
           raw_url=$(grep '^distributionUrl=' "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.properties" | cut -d'=' -f2- | tr -d '\r')
           dist_url=${raw_url//\\:/:}
-          echo "distributionUrl (raw)    : $raw_url"
-          echo "distributionUrl (usable) : $dist_url"
-
           regen=0
-          if [ ! -f "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "gradle-wrapper.jar missing → will regenerate"
-            regen=1
-          else
-            echo "Testing existing wrapper jar..."
-            if ! java -classpath "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain -v >/dev/null 2>&1; then
-              echo "Existing wrapper jar seems incompatible → will regenerate"
-              regen=1
-            fi
+          if [ ! -f "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.jar" ]; then regen=1; else
+            if ! java -classpath "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain -v >/dev/null 2>&1; then regen=1; fi
           fi
-
           if [ "$regen" = "1" ]; then
             mkdir -p /tmp/gradle && cd /tmp/gradle
-            echo "Downloading Gradle distribution..."
             curl -fL --retry 3 --retry-connrefused "$dist_url" -o gradle.zip
-            echo "Unzipping..."
             unzip -q gradle.zip
             GDIR=$(find . -maxdepth 1 -type d -name "gradle-*")
-            echo "Extracted to: $GDIR"
             chmod +x "$GDIR/bin/gradle"
-
-            echo "Running Gradle 'wrapper' task with diagnostics…"
-            "$GDIR/bin/gradle" -v
             "$GDIR/bin/gradle" -p "$PROJECT_DIR" wrapper --stacktrace --info
-            echo "Wrapper regenerated"
-          else
-            echo "gradle-wrapper.jar is OK"
           fi
-
-          echo "After bootstrap, wrapper directory:"
           ls -l "$PROJECT_DIR/gradle/wrapper" || true
 
       - name: Verify Gradle wrapper JAR
@@ -97,45 +74,33 @@ jobs:
           set -euxo pipefail
           file gradle/wrapper/gradle-wrapper.jar || true
           ls -l gradle/wrapper/gradle-wrapper.jar || true
-          echo "Trying to execute GradleWrapperMain -v…"
-          java -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain -v || (echo "Wrapper JAR still invalid"; exit 2)
+          java -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain -v || (echo "Wrapper JAR invalid"; exit 2)
 
       - name: Ensure Gradle wrapper is executable
         run: chmod +x ./gradlew
 
-      # 👇 This prints plugin versions and repositories so we can spot mismatches quickly
-      - name: Show AGP/Kotlin versions & repositories
-        run: |
-          echo "==== Project build.gradle.kts (top) ===="
-          sed -n '1,120p' build.gradle.kts || true
-          echo "==== settings.gradle.kts ===="
-          sed -n '1,200p' settings.gradle.kts || true
-          echo "==== app/build.gradle.kts (top) ===="
-          sed -n '1,200p' app/build.gradle.kts || true
-
-      - name: Show Java/Gradle versions
+      - name: Java & Gradle versions
         run: |
           java -version
           ./gradlew -v
 
-      # 👇 Capture FULL build log to a file, so we don't have to scroll 700+ lines in the UI
       - name: Build Debug APK (verbose)
         run: |
           set -o pipefail
-          ./gradlew assembleDebug --stacktrace --info --no-daemon --console=plain 2>&1 | tee build-logs.txt
+          ./gradlew clean assembleDebug --stacktrace --info --warning-mode all --no-daemon --console=plain 2>&1 | tee build-logs.txt
 
-      # 👇 On failure, print the key parts so you can paste them here easily
-      - name: Summarize failure (What went wrong / Caused by)
+      - name: Summarize failure (What went wrong / Caused by / first Kotlin 'e:' line)
         if: failure()
         run: |
           echo "================ What went wrong (context) ================"
           grep -n -A6 -B6 "What went wrong" build-logs.txt || true
           echo "================ Caused by (context) ======================"
           grep -n -A6 -B6 "Caused by:" build-logs.txt || true
+          echo "================ First compiler error (Kotlin 'e:' line) ="
+          grep -n "^e: " build-logs.txt | head -n 5 || true
           echo "================ LAST 200 LINES ==========================="
           tail -n 200 build-logs.txt || true
 
-      # 👇 Upload the full build log regardless of success/failure
       - name: Upload full Gradle build logs
         if: always()
         uses: actions/upload-artifact@v4
